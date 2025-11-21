@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Balade géolocalisée - Sur les traces de Léa</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <!-- Leaflet GPX (loader de GPX) -->
+  <script src="https://unpkg.com/leaflet-gpx"></script>
+
+  <style>
+    body { background: linear-gradient(to bottom right,#0055a4,#ffd700); font-family: Arial, sans-serif; }
+    #map { height: 56vh; min-height: 380px; border-radius: .75rem; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+    .card { transition: transform .22s ease, box-shadow .22s ease; }
+    .card:hover { transform: translateY(-4px); box-shadow: 0 8px 22px rgba(0,0,0,.18); }
+    .progress-bar{height:8px;background:#e5e7eb;border-radius:9999px;overflow:hidden;margin-top:.5rem}
+    .progress-fill{height:100%;width:0;background:#1e90ff;transition:width .25s linear}
+    /* notification bas carte */
+    #notice { position: absolute; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 600; display:none;
+      background: rgba(30,144,255,0.95); color: white; padding: .6rem 1rem; border-radius: 9999px; font-weight:700; box-shadow:0 6px 18px rgba(0,0,0,.25);}
+    /* marqueurs */
+    .marker-yellow{background:#1e90ff;color:#fff;font-weight:700;border-radius:9999px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 10px rgba(0,0,0,.25);font-size:14px}
+    .marker-gray{background:#cfcfcf;color:#111;font-weight:700;border-radius:9999px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.12);font-size:14px}
+    /* étape active list */
+    .etape-active { outline: 3px solid rgba(30,144,255,.25); background: linear-gradient(90deg, rgba(30,144,255,.06), transparent); }
+    /* petit bouton */
+    .toggle { background: rgba(255,255,255,0.12); padding: .35rem .6rem; border-radius: .5rem; color: #fff; font-weight:600 }
+  </style>
+</head>
+<body class="min-h-screen text-white flex flex-col">
+
+  <header class="text-center py-6 px-4">
+    <h1 class="text-3xl md:text-4xl font-extrabold">Sur les traces de Léa</h1>
+    <p class="text-base md:text-lg mt-2">Balade géolocalisée - audio automatique (15 m)</p>
+  </header>
+
+  <div class="w-full max-w-7xl mx-auto px-4 mb-6 relative">
+    <div id="map" class="rounded-lg overflow-hidden"></div>
+
+    <!-- notification -->
+    <div id="notice"></div>
+  </div>
+
+  <div class="w-full max-w-7xl mx-auto px-4 mb-10 grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Controles -->
+    <div class="lg:col-span-1 flex flex-col gap-4">
+      <div class="bg-white/10 p-4 rounded-2xl">
+        <button id="btnLocate" class="w-full mb-2 py-2 rounded-lg bg-white text-black font-bold">Activer la localisation</button>
+        <div class="flex gap-3 items-center">
+          <label class="toggle"> <input id="followToggle" type="checkbox" class="hidden"><span id="followLabel">Suivre ma position</span></label>
+        </div>
+        <p class="text-sm text-gray-200 mt-3">Les audios se lancent automatiquement quand vous êtes à moins de <strong>15 m</strong> d'une étape. L'audio précédent sera interrompu.</p>
+      </div>
+
+      <div class="bg-white/10 p-4 rounded-2xl">
+        <h3 class="font-semibold mb-2">Statut</h3>
+        <p id="statusText" class="text-sm text-gray-200">Localisation inactive</p>
+        <p id="closestText" class="text-sm text-gray-200 mt-2">Prochaine étape : —</p>
+      </div>
+
+      <div class="bg-white/10 p-4 rounded-2xl">
+        <h3 class="font-semibold mb-2">Conseils</h3>
+        <ul class="text-sm text-gray-200 list-disc pl-4">
+          <li>Autorise la géoloc. pour déclencher les audios.</li>
+          <li>Un clic initial permet la lecture automatique sur mobile.</li>
+          <li>Garde le son activé et vérifie le volume.</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Liste des étapes -->
+    <section id="listContainer" class="lg:col-span-2 space-y-4">
+      <div id="etapes" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+    </section>
+  </div>
+
+  <footer class="bg-gray-900 text-gray-300 w-full py-6 px-6 flex justify-between flex-wrap gap-4">
+    <div>
+      <h3 class="font-bold text-lg mb-2">Contact</h3>
+      <p>📞 <a href="tel:+33123456789" class="underline hover:text-yellow-400">03 85 26 07 06</a></p>
+    </div>
+    <div class="flex gap-4 flex-wrap justify-end">
+      <img src="logo1.png" alt="Logo 1" class="h-12 md:h-20">
+      <img src="logo2.png" alt="Logo 2" class="h-12 md:h-20">
+      <img src="logo3.png" alt="Logo 3" class="h-12 md:h-20">
+    </div>
+  </footer>
+
+  <script>
+    /*************************************************************************
+     * Données : audios (reste comme avant)
+     *************************************************************************/
+    const audios = [
+      { fichier: "indice1.mp3", titre: "Introduction au jeu", coords: [46.214074, 4.255124] },
+      { fichier: "indice2.mp3", titre: "Le début de l'aventure", coords: [46.214074, 4.255124] },
+      { fichier: "indice3.mp3", titre: "1.Le château de la madeleine", coords: [46.212159, 4.255637] },
+      { fichier: "indice4.mp3", titre: "1.2 Nouveau ancêtre débloqué", coords: [46.212159, 4.255637] },
+      { fichier: "indice5.mp3", titre: "2. L'église romane", coords: [46.212364, 4.255125] },
+      { fichier: "indice6.mp3", titre: "2.2 Indice sur le prochain ancêtre", coords: [46.212290, 4.254898] },
+      { fichier: "indice7.mp3", titre: "3.La croix blanche", coords: [46.214069, 4.255620] },
+      { fichier: "indice8.mp3", titre: "4.Église de Saint-Maurice", coords: [46.216911, 4.252969] },
+      { fichier: "indice9.mp3", titre: "5. La légende du monument", coords: [46.217832, 4.252098] },
+      { fichier: "indice10.mp3", titre: "6. L'église devenue chapelle", coords: [46.218209, 4.251943] },
+      { fichier: "indice11.mp3", titre: "6.2 Un cimetière fascinant", coords: [46.218149, 4.251747] },
+      { fichier: "indice12.mp3", titre: "6.3Un cimetière particulier", coords: [46.218149, 4.251747] },
+      { fichier: "indice13.mp3", titre: "6.4 Admirez la vue", coords: [46.218169, 4.251661] },
+      { fichier: "indice14.mp3", titre: "7. La maison ragot", coords: [46.221122, 4.252746] },
+      { fichier: "indice15.mp3", titre: "8.Le four à chaux", coords: [46.222782, 4.243660] },
+      { fichier: "indice16.mp3", titre: "On fait le point ?", coords: [46.214129, 4.255208] }
+    ];
+
+    /*************************************************************************
+     * Config
+     *************************************************************************/
+    const TRIGGER_DISTANCE_M = 15; // ← déclenchement à 15 m
+    const FOLLOW_ON_ENABLE = true;
+    const START_ZOOM = 15;
+
+    /*************************************************************************
+     * Elements UI
+     *************************************************************************/
+    const btnLocate = document.getElementById('btnLocate');
+    const followToggle = document.getElementById('followToggle');
+    const followLabel = document.getElementById('followLabel');
+    const statusText = document.getElementById('statusText');
+    const closestText = document.getElementById('closestText');
+    const notice = document.getElementById('notice');
+    const etapesContainer = document.getElementById('etapes');
+
+    /*************************************************************************
+     * Leaflet init
+     *************************************************************************/
+    const map = L.map('map', {
+      center: [46.215, 4.253],
+      zoom: START_ZOOM,
+      zoomControl: true,
+      dragging: true,
+      scrollWheelZoom: false
+    });
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    // Ligne de progression (sera alimentée par positions utilisateur)
+    const routeProgress = L.polyline([], { color: '#1e90ff', weight: 5, opacity: 0.95 }).addTo(map);
+
+    // Cercle / marqueur de la position de l'utilisateur
+    let userMarker = null;
+    let userAccuracyCircle = null;
+
+    // Marqueurs d'étapes
+    const markers = [];
+    // Références audio et cartes
+    const audioEls = [];
+    const cards = [];
+
+    // Index de l'étape actuellement en cours (proche) ou -1
+    let currentNearbyIndex = -1;
+    // audio en cours (index)
+    let playingIndex = -1;
+
+    // Préparer UI des étapes (liste + audio)
+    audios.forEach((a, i) => {
+      // Card
+      const card = document.createElement('div');
+      card.className = 'card bg-white text-gray-900 rounded-2xl p-4 shadow-md';
+      card.innerHTML = `
+        <h4 class="font-semibold mb-2">${i+1}. ${a.titre}</h4>
+        <audio id="audio_${i}" preload="auto" class="w-full" >
+          <source src="audio/${a.fichier}" type="audio/mpeg">
+          Votre navigateur ne supporte pas la lecture audio.
+        </audio>
+        <div class="progress-bar mt-3"><div id="progress_${i}" class="progress-fill"></div></div>
+      `;
+      etapesContainer.appendChild(card);
+      cards.push(card);
+
+      const audioEl = card.querySelector('audio');
+      audioEls.push(audioEl);
+
+      // progress update
+      audioEl.addEventListener('timeupdate', () => {
+        if (!isFinite(audioEl.duration) || audioEl.duration === 0) return;
+        const pct = (audioEl.currentTime / audioEl.duration) * 100;
+        const pf = document.getElementById(`progress_${i}`);
+        if (pf) pf.style.width = `${pct}%`;
+      });
+
+      audioEl.addEventListener('ended', () => {
+        playingIndex = -1;
+      });
+
+      // clic sur la carte de la liste : recentre sur l'étape et ouvre popup
+      card.addEventListener('click', () => {
+        if (markers[i]) {
+          map.setView(markers[i].getLatLng(), START_ZOOM, { animate: true });
+          markers[i].openPopup();
+        }
+      });
+    });
+
+    // Créer les marqueurs (icônes initialement grises sauf la première)
+    audios.forEach((a, i) => {
+      const isFirst = (i === 0);
+      const html = `<div class="${isFirst ? 'marker-yellow' : 'marker-gray'}">${i+1}</div>`;
+      const icon = L.divIcon({ html, className: '', iconSize: [36,36], iconAnchor: [18,18] });
+      const m = L.marker(a.coords, { icon }).addTo(map);
+      m.bindPopup(`<b>${i+1}. ${a.titre}</b>`);
+      m.on('click', () => {
+        cards[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
+        m.openPopup();
+      });
+      markers.push(m);
+    });
+
+    // Ajuster vue initiale plus tard (après chargement du GPX)
+    // ----- Charger le GPX externe -----
+    // IMPORTANT: chemin local tel que fourni. Adapte si tu héberges autrement.
+    const GPX_URL = "/mnt/data/New file 3.gpx";
+
+    const gpx = new L.GPX(GPX_URL, {
+      async: true,
+      polyline_options: {
+        color: "#1e90ff",
+        weight: 4,
+        opacity: 0.9
+      }
+    })
+    .on("loaded", function(e) {
+      try {
+        map.fitBounds(e.target.getBounds(), { padding: [40, 40] });
+      } catch (err) { /* ignore */ }
+      showNotice("Tracé GPX chargé ✓", 2500);
+    })
+    .on("addline", function(e) {
+      // ici on pourrait récupérer les coordonnées exactes si besoin
+      // const coords = e.line.getLatLngs();
+    })
+    .on("error", function(err) {
+      console.error("Erreur de chargement GPX", err);
+      showNotice("Impossible de charger le fichier GPX.", 5000);
+    })
+    .addTo(map);
+
+    /*************************************************************************
+     * Fonctions utilitaires
+     *************************************************************************/
+    function showNotice(text, ms = 3000) {
+      notice.textContent = text;
+      notice.style.display = 'block';
+      notice.style.opacity = '1';
+      setTimeout(() => {
+        notice.style.display = 'none';
+      }, ms);
+    }
+
+    function distanceMeters(latlng1, latlng2) {
+      return L.latLng(latlng1).distanceTo(L.latLng(latlng2));
+    }
+
+    function highlightStep(i) {
+      cards.forEach((c, idx) => c.classList.toggle('etape-active', idx === i));
+    }
+
+    function setMarkerUnlocked(i) {
+      const m = markers[i];
+      if (!m) return;
+      const el = m.getElement();
+      const innerHtml = `<div class="marker-yellow">${i+1}</div>`;
+      if (el) {
+        el.innerHTML = innerHtml;
+      } else {
+        m.setIcon(L.divIcon({ html: innerHtml, className: '', iconSize: [36,36], iconAnchor: [18,18] }));
+      }
+    }
+
+    function playAudioIndex(i) {
+      if (!audioEls[i]) return;
+      if (playingIndex !== -1 && audioEls[playingIndex] && playingIndex !== i) {
+        try { audioEls[playingIndex].pause(); audioEls[playingIndex].currentTime = 0; } catch(e){}
+      }
+      playingIndex = i;
+      audioEls[i].play().catch(err => {
+        console.warn("Impossible de lancer l'audio automatiquement : ", err);
+        showNotice("Appuyez sur la page ou sur le bouton 'Activer la localisation' pour autoriser la lecture audio", 5000);
+      });
+    }
+
+    /*************************************************************************
+     * Géolocalisation
+     *************************************************************************/
+    let watchId = null;
+    let hasUserGesture = false;
+
+    function enableGeolocation() {
+      if (!('geolocation' in navigator)) {
+        statusText.textContent = 'Géolocalisation non disponible dans ce navigateur';
+        return;
+      }
+
+      hasUserGesture = true;
+
+      btnLocate.disabled = true;
+      btnLocate.textContent = 'Localisation activée';
+      statusText.textContent = 'Localisation : en attente de position...';
+
+      watchId = navigator.geolocation.watchPosition(onPositionUpdate, onPositionError, {
+        enableHighAccuracy: true,
+        maximumAge: 2000,
+        timeout: 10000
+      });
+    }
+
+    function onPositionError(err) {
+      console.error('GEO ERROR', err);
+      statusText.textContent = `Erreur géoloc : ${err.message || err.code}`;
+      showNotice('Impossible d’obtenir votre position. Vérifiez les permissions GPS.', 5000);
+    }
+
+    function onPositionUpdate(pos) {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      const accuracy = pos.coords.accuracy || 30;
+
+      statusText.textContent = `Localisation active (±${Math.round(accuracy)} m)`;
+
+      // update user marker / accuracy circle
+      if (!userMarker) {
+        userMarker = L.circleMarker([lat, lng], { radius: 8, fillColor: '#1e90ff', color:'#fff', weight:2, fillOpacity:1 }).addTo(map);
+        userAccuracyCircle = L.circle([lat, lng], { radius: accuracy, color:'#1e90ff', weight:1, opacity:0.15 }).addTo(map);
+      } else {
+        userMarker.setLatLng([lat, lng]);
+        userAccuracyCircle.setLatLng([lat, lng]).setRadius(accuracy);
+      }
+
+      // push to route progress (visualiser le parcours réel)
+      const progLatLngs = routeProgress.getLatLngs();
+      const last = progLatLngs.length ? progLatLngs[progLatLngs.length - 1] : null;
+      if (!last || last.lat !== lat || last.lng !== lng) {
+        progLatLngs.push([lat, lng]);
+        routeProgress.setLatLngs(progLatLngs);
+      }
+
+      // follow if enabled
+      if (followToggle.checked) {
+        map.setView([lat, lng], START_ZOOM, { animate: true });
+      }
+
+      // déterminer la plus proche étape
+      let nearestIndex = -1;
+      let nearestDist = Infinity;
+      audios.forEach((a, idx) => {
+        const d = distanceMeters([lat, lng], a.coords);
+        if (d < nearestDist) {
+          nearestDist = d; nearestIndex = idx;
+        }
+      });
+
+      if (nearestIndex !== -1) {
+        closestText.textContent = `Prochaine étape probable : ${nearestIndex+1}. ${audios[nearestIndex].titre} — à ${Math.round(nearestDist)} m`;
+      }
+
+      // Déclenchement si on est à moins de TRIGGER_DISTANCE_M d'un point audio
+      audios.forEach((a, idx) => {
+        const d = distanceMeters([lat,lng], a.coords);
+        const isNearby = d <= TRIGGER_DISTANCE_M;
+        if (isNearby) {
+          if (playingIndex !== idx) {
+            if (currentNearbyIndex !== idx) {
+              currentNearbyIndex = idx;
+              setMarkerUnlocked(idx);
+              highlightStep(idx);
+              if (hasUserGesture) {
+                playAudioIndex(idx);
+                showNotice(`🔊 Étape ${idx+1} : ${audios[idx].titre}`, 3500);
+              } else {
+                showNotice("Appuyez d'abord sur 'Activer la localisation' pour autoriser la lecture audio",5000);
+              }
+            }
+          }
+        } else {
+          if (currentNearbyIndex === idx && !isNearby) {
+            currentNearbyIndex = -1;
+          }
+        }
+      });
+    }
+
+    /*************************************************************************
+     * Interactions UI
+     *************************************************************************/
+    btnLocate.addEventListener('click', () => {
+      enableGeolocation();
+    });
+
+    followToggle.addEventListener('change', () => {
+      followLabel.textContent = followToggle.checked ? 'Suivre ma position : ON' : 'Suivre ma position';
+      if (followToggle.checked && userMarker) {
+        map.setView(userMarker.getLatLng(), START_ZOOM, { animate: true });
+      }
+    });
+
+    /*************************************************************************
+     * Utilities au démarrage : marquer le premier point comme "débloqué"
+     *************************************************************************/
+    setMarkerUnlocked(0);
+
+    /*************************************************************************
+     * Nettoyage : arrêter la géoloc si on quitte la page
+     *************************************************************************/
+    window.addEventListener('beforeunload', () => {
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    });
+
+    /*************************************************************************
+     * Debug
+     *************************************************************************/
+    window._bgdata = { audios, markers, audioEls, routeProgress, gpx };
+  </script>
+</body>
+</html>
